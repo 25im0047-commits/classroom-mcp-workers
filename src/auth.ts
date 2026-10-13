@@ -79,14 +79,19 @@ export const authHandler = {
     };
     if (url.pathname === "/health" && request.method === "GET") {
       const configured = Boolean(
-        env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET,
+        env.GOOGLE_CLIENT_ID &&
+        env.GOOGLE_CLIENT_SECRET &&
+        env.ALLOWED_EMAILS?.split(",").some((email) => email.trim()),
       );
       return Response.json(
         {
           service: "classroom-mcp",
           status: configured ? "ok" : "configuration_required",
         },
-        { status: configured ? 200 : 503, headers: securityHeaders },
+        {
+          status: configured ? 200 : 503,
+          headers: { ...securityHeaders, "Content-Type": "application/json" },
+        },
       );
     }
     if (url.pathname === "/" && request.method === "GET") {
@@ -105,9 +110,13 @@ export const authHandler = {
         status: 404,
         headers: securityHeaders,
       });
-    if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+    if (
+      !env.GOOGLE_CLIENT_ID ||
+      !env.GOOGLE_CLIENT_SECRET ||
+      !env.ALLOWED_EMAILS?.split(",").some((email) => email.trim())
+    ) {
       return new Response(
-        "Configure GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Cloudflare Worker Secrets. See README.md.",
+        "Configure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and ALLOWED_EMAILS in Cloudflare Worker Secrets. See README.md.",
         { status: 503, headers: securityHeaders },
       );
     }

@@ -1,5 +1,7 @@
 # 個人デプロイガイド
 
+このForkの作成済み環境を利用する場合は[Workers運用手順](workers-setup.md)を参照してください。以下は別の環境を新規作成するための汎用ガイドです。このForkでは非機密の`PUBLIC_URL`を`wrangler.jsonc`にも保存しているため、別の環境へ導入するときはその値と`account_id`も変更してください。
+
 自分のCloudflare Workerを作成し、自分のGoogleアカウントでClassroomを読む手順です。Google OAuthクライアント、Worker、KVは各自で用意します。作者のWorkerや資格情報を利用する必要はありません。
 
 更新日：2026-10-07。iUの学生向けUNIPA通知は任意で追加できます。Classroomの接続を確認してから「UNIPA通知を追加する」へ進んでください。[実装・検証記録](README.md)は導入手順と分けて参照できます。
@@ -116,7 +118,7 @@ npx wrangler secret put ALLOWED_EMAILS
 | `GOOGLE_CLIENT_SECRET` | そのクライアントシークレット              |
 | `ALLOWED_EMAILS`       | Classroomで使う自分のGoogleメールアドレス |
 
-`ALLOWED_EMAILS`は実装上は任意ですが、個人用では本人のアドレスを設定してください。未設定または空の場合、Google OAuth側で認証可能な全ユーザーの接続を許可します。メールアドレスは完全一致で照合し、大文字・小文字は区別しません。
+このForkでは`ALLOWED_EMAILS`は必須です。未設定または空の場合、Google OAuthの認可開始と既存接続を拒否します。メールアドレスは完全一致で照合し、大文字・小文字は区別しません。
 
 UNIPAを追加する場合は、この値を本人のGoogleメールアドレス**1件だけ**にします。Workerに保存した固定のUNIPA資格情報を他の学生と共有する構成は対象外です。
 

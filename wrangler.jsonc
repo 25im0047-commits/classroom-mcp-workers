@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "classroom-mcp",
+  "name": "classroom-mcp-25im0047",
+  "account_id": "f38e0773ca8b5518385378f84c9497fb",
   "main": "src/index.ts",
   "minify": true,
   "assets": {
@@ -10,16 +11,15 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "workers_dev": true,
   "preview_urls": false,
-  // Runtime variables are managed in Workers Settings, including PUBLIC_URL.
+  // Public URL is non-secret; credentials and allowed emails are runtime Secrets.
   "keep_vars": true,
+  "vars": {
+    "PUBLIC_URL": "https://classroom-mcp-25im0047.shotakobayashi-dev.workers.dev",
+  },
   "kv_namespaces": [
     {
       "binding": "OAUTH_KV",
-      "id": "50886f599f7d48398a628e13f564600c",
-    },
-    {
-      "binding": "UNIPA_SNAPSHOTS",
-      "id": "d9adce5ef3f849a08c18c7b8d926c9b4",
+      "id": "74a7470cdbf44ba2a64c22258f460d65",
     },
   ],
   "observability": {

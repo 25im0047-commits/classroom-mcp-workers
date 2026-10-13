@@ -31,7 +31,8 @@ export function emailAllowed(email: string, allowlist?: string): boolean {
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
-  return allowed.length === 0 || allowed.includes(email.toLowerCase());
+  // Personal deployment: missing configuration must never widen access.
+  return allowed.includes(email.toLowerCase());
 }
 
 export async function s256(verifier: string): Promise<string> {

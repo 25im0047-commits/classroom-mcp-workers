@@ -16,7 +16,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Mugen-Ibi/Classroom-MCP.git"
+    "url": "git+https://github.com/25im0047-commits/classroom-mcp-workers.git"
   },
   "keywords": [],
   "author": "",
@@ -26,12 +26,12 @@
     "node": ">=24"
   },
   "bugs": {
-    "url": "https://github.com/Mugen-Ibi/Classroom-MCP/issues"
+    "url": "https://github.com/25im0047-commits/classroom-mcp-workers/issues"
   },
-  "homepage": "https://github.com/Mugen-Ibi/Classroom-MCP#readme",
+  "homepage": "https://github.com/25im0047-commits/classroom-mcp-workers#readme",
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.1",
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/server": "2.3.1",
     "agents": "0.24.0",
     "fast-xml-parser": "5.11.2",
     "linkedom": "0.18.13",
@@ -39,12 +39,17 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20261001.1",
-    "@modelcontextprotocol/client": "2.0.0",
-    "miniflare": "5.20260930.0-alpha",
+    "@cloudflare/workers-types": "5.20261006.1",
+    "@modelcontextprotocol/client": "2.3.1",
+    "miniflare": "5.20261006.1-alpha",
     "prettier": "3.9.9",
     "typescript": "7.0.2",
     "vitest": "5.0.3",
-    "wrangler": "4.145.0"
+    "wrangler": "4.149.0"
+  },
+  "overrides": {
+    "@modelcontextprotocol/client": "$@modelcontextprotocol/client",
+    "@modelcontextprotocol/server": "$@modelcontextprotocol/server",
+    "@modelcontextprotocol/sdk": "1.31.0"
   }
 }

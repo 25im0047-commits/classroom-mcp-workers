@@ -32,6 +32,7 @@ describe("Bounded consent form", () => {
       PUBLIC_URL: "https://classroom.test",
       GOOGLE_CLIENT_ID: "synthetic-client",
       GOOGLE_CLIENT_SECRET: "synthetic-secret",
+      ALLOWED_EMAILS: "student@example.com",
       OAUTH_PROVIDER: oauth,
     } as unknown as Env;
     const consent = await authHandler.fetch(
@@ -82,6 +83,7 @@ describe("Bounded consent form", () => {
       PUBLIC_URL: "https://classroom.test",
       GOOGLE_CLIENT_ID: "client",
       GOOGLE_CLIENT_SECRET: "secret",
+      ALLOWED_EMAILS: "student@example.com",
       OAUTH_PROVIDER: { approveConsent },
     } as unknown as Env);
     expect(response.status).toBe(400);

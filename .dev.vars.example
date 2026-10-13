@@ -2,8 +2,8 @@
 PUBLIC_URL="http://localhost:8787"
 GOOGLE_CLIENT_ID="replace-with-google-web-client-id"
 GOOGLE_CLIENT_SECRET="replace-with-google-client-secret"
-# Optional: restrict who can authorize this MCP (comma-separated exact emails).
-ALLOWED_EMAILS=""
+# Required: only these accounts may authorize this MCP. Empty denies all access.
+ALLOWED_EMAILS="replace-with-your-classroom-email"
 # Optional UNIPA for this student's own deployment only.
 # When enabled, ALLOWED_EMAILS must contain exactly one owner email;
 # bind the separate UNIPA_SNAPSHOTS KV namespace in wrangler.jsonc.

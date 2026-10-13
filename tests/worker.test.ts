@@ -1,9 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { s256 } from "../src/google";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const origin = "http://127.0.0.1:8787";
 let mf: Miniflare;
+let options: ConstructorParameters<typeof Miniflare>[0];
+let persistencePath: string;
 let clientId: string;
 let mcpToken: string;
 let refreshToken: string;
@@ -38,8 +43,9 @@ const send = async (path: string, init?: RequestInit) => {
 };
 
 beforeAll(async () => {
-  mf = new Miniflare(
-    convertV4MiniflareOptions({
+  persistencePath = await mkdtemp(join(tmpdir(), "classroom-oauth-test-"));
+  options = {
+    ...convertV4MiniflareOptions({
       workers: [
         {
           name: "classroom",
@@ -52,6 +58,7 @@ beforeAll(async () => {
             PUBLIC_URL: origin,
             GOOGLE_CLIENT_ID: "test-client",
             GOOGLE_CLIENT_SECRET: "test-secret",
+            ALLOWED_EMAILS: "student@example.com",
           },
           outboundService: "google-mock",
         },
@@ -82,6 +89,20 @@ beforeAll(async () => {
           outboundService: "google-mock",
         },
         {
+          name: "no-allowlist",
+          modules: true,
+          scriptPath: "dist/index.js",
+          compatibilityDate: "2026-10-01",
+          compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
+          kvNamespaces: ["OAUTH_KV"],
+          bindings: {
+            PUBLIC_URL: origin,
+            GOOGLE_CLIENT_ID: "test-client",
+            GOOGLE_CLIENT_SECRET: "test-secret",
+          },
+          outboundService: "google-mock",
+        },
+        {
           name: "unconfigured",
           modules: true,
           scriptPath: "dist/index.js",
@@ -92,10 +113,16 @@ beforeAll(async () => {
         },
       ],
     }),
-  );
+    resourcePersistencePath: persistencePath,
+  };
+  mf = new Miniflare(options);
   await mf.ready;
 });
-afterAll(async () => mf?.dispose());
+afterAll(async () => {
+  await mf?.dispose();
+  if (persistencePath)
+    await rm(persistencePath, { recursive: true, force: true });
+});
 
 describe("Worker OAuth and MCP in workerd", () => {
   it("publishes discovery, challenges unauthenticated MCP, and rejects a foreign host", async () => {
@@ -340,6 +367,7 @@ describe("Worker OAuth and MCP in workerd", () => {
     expect(token.access_token).not.toBe(mcpToken);
     expect(token.refresh_token).not.toBe(refreshToken);
     expect(JSON.stringify(token)).not.toContain("google-refresh");
+    refreshToken = token.refresh_token;
   });
 
   it("recovers a transient Classroom 503 during an authenticated MCP call", async () => {
@@ -481,6 +509,9 @@ describe("Worker OAuth and MCP in workerd", () => {
     const issued = await exchange.json();
     expect(issued.scope).toContain("unipa:read");
     unipaToken = issued.access_token;
+    // Reauthorization replaces the earlier grant for this client and resource.
+    mcpToken = issued.access_token;
+    refreshToken = issued.refresh_token;
     const tools = await call("tools/list", {});
     expect(tools.tools).toHaveLength(8);
     expect(
@@ -547,5 +578,79 @@ describe("Worker OAuth and MCP in workerd", () => {
       expect(JSON.stringify(result)).not.toContain(secret);
       expect(stored).not.toContain(secret);
     }
+  });
+
+  it("stores encrypted Google grants and keeps OAuth usable after a complete runtime restart", async () => {
+    const kv = await mf.getKVNamespace("OAUTH_KV", "classroom");
+    const keys = await kv.list();
+    expect(keys.keys.some((key) => key.name.startsWith("grant:"))).toBe(true);
+    const stored = await Promise.all(keys.keys.map((key) => kv.get(key.name)));
+    for (const secret of [
+      "google-access",
+      "google-refresh",
+      "google-refreshed",
+      mcpToken,
+      refreshToken,
+    ]) {
+      expect(JSON.stringify(stored)).not.toContain(secret);
+    }
+    await mf.dispose();
+    mf = new Miniflare(options);
+    await mf.ready;
+    const response = await send("/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: clientId,
+        resource: `${origin}/mcp`,
+      }).toString(),
+    });
+    expect(response.status).toBe(200);
+    const token = await response.json();
+    mcpToken = token.access_token;
+    refreshToken = token.refresh_token;
+    const listed = await send("/mcp", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${mcpToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 91,
+        method: "tools/list",
+        params: {},
+      }),
+    });
+    expect(listed.status).toBe(200);
+    expect(
+      (await rpc(listed as unknown as Response)).result.tools,
+    ).toHaveLength(5);
+  });
+
+  it("fails closed for missing allowlist, including already issued access and refresh tokens", async () => {
+    const worker = await mf.getWorker("no-allowlist");
+    expect((await worker.fetch(`${origin}/health`)).status).toBe(503);
+    expect((await worker.fetch(`${origin}/authorize`)).status).toBe(503);
+    const access = await worker.fetch(`${origin}/mcp`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${mcpToken}` },
+    });
+    expect(access.status).toBe(401);
+    const refreshed = await worker.fetch(`${origin}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: clientId,
+        resource: `${origin}/mcp`,
+      }).toString(),
+    });
+    expect(refreshed.status).toBe(400);
+    expect((await refreshed.json()).error).toBe("invalid_grant");
   });
 });

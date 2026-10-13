@@ -1,5 +1,7 @@
 # Google Classroom Readonly MCP
 
+このForkの導入状況と残りの設定は[Workers運用手順](docs/workers-setup.md)を参照してください。個人用のWorkerとKVを使用し、`ALLOWED_EMAILS`の未設定・空欄ではすべての接続を拒否します。Google資格情報とメールアドレスはWorkerの実行時Secretに保存します。
+
 <img src="public/icon-128.png" width="80" height="80" alt="Classroom MCP">
 
 このリポジトリを自分のCloudflareアカウントへデプロイし、自分のGoogleアカウントで使うためのプロジェクトです。共有サービスの接続先は提供しません。Googleの公式製品ではありません。
@@ -126,7 +128,7 @@ UNIPAの所有者確認は、資格情報の使用と通知KVの読み取りよ�
 
 [個人デプロイガイド](docs/personal-deployment.md)に、初回デプロイ、Forkの更新、GitHubからの自動デプロイ、利用停止の手順をまとめています。以下は設定項目のリファレンスです。
 
-リポジトリ内の`wrangler.jsonc`には作者のWorker名・KV設定が残っています。個人デプロイでは、`name`、`OAUTH_KV`のIDを必ず自分の環境に合わせて変更してください。`PUBLIC_URL`などの実行時変数はWorkersのSettingsで設定します。`keep_vars: true`により、デプロイ時にもWorkers側で設定した変数を保持します。
+このForkの`wrangler.jsonc`は専用Workerの`name`、`account_id`、`OAUTH_KV`、非機密の`PUBLIC_URL`を設定済みです。別の環境で利用する場合はこれらを自分の値へ変更してください。Google資格情報と許可メールはWorkerの実行時Secretsに保存します。`keep_vars: true`により、コード更新時にもWorkers側で設定した変数を保持します。
 
 Dashboardの **Workers & Pages → 自分のWorker → Settings → Variables and Secrets** で、次の非機密の実行時変数を設定します。Text変数としてもSecretとしても管理できます。
 
@@ -175,9 +177,9 @@ ExternalかつTestingのGoogle OAuthでは、この構成の更新トークン�
 | ------------------------ | ---------------------------------------------------- |
 | `GOOGLE_CLIENT_ID`       | Googleで作成したOAuthクライアントID                  |
 | `GOOGLE_CLIENT_SECRET`   | そのクライアントシークレット                         |
-| `ALLOWED_EMAILS`（任意） | 接続を許可するメールアドレス。カンマ区切りで完全一致 |
+| `ALLOWED_EMAILS`（必須） | 接続を許可するメールアドレス。カンマ区切りで完全一致 |
 
-自分専用で使う場合は`ALLOWED_EMAILS`に自分のGoogleメールアドレスを設定してください。省略すると、Google OAuthアプリの対象ユーザーならそれぞれ自分のClassroomへ接続できます。既存接続にもメール許可リストを再確認します。
+`ALLOWED_EMAILS`に自分のGoogleメールアドレスを設定してください。省略・空欄では認可開始とヘルスチェックが503になり、既存のアクセス・更新トークンも拒否します。既存接続にもメール許可リストを再確認します。
 
 Wranglerで設定する場合：
 
@@ -190,7 +192,7 @@ npx wrangler secret put ALLOWED_EMAILS
 
 GoogleのSecret、アクセストークン、更新トークンをGitHubやチャットに貼る必要はありません。OAuthの暗号化はライブラリが処理するため、追加のCOOKIE_ENCRYPTION_KEYは不要です。KVはOAuthクライアント、認可状態、暗号化されたGoogle認証情報を保存します。KVを削除すると全クライアントが再接続を必要とします。
 
-GoogleのSecretsが未設定でもWorkerはデプロイ可能ですが、`/health`と認可開始は503を返します。設定後に`/health`が200で`status: ok`になることを確認してください。このヘルスチェックは設定の有無のみを確認し、Google資格情報の有効性までは検証しません。
+GoogleのSecretsまたは`ALLOWED_EMAILS`が未設定でもWorkerはデプロイ可能ですが、`/health`と認可開始は503を返します。設定後に`/health`が200で`status: ok`になることを確認してください。このヘルスチェックは設定の有無のみを確認し、Google資格情報の有効性までは検証しません。
 
 ## ChatGPTから接続
 

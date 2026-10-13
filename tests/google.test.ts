@@ -14,6 +14,7 @@ const env = {
   PUBLIC_URL: "https://classroom.test",
   GOOGLE_CLIENT_ID: "client",
   GOOGLE_CLIENT_SECRET: "secret",
+  ALLOWED_EMAILS: "me@example.com",
 } as Env;
 const props: GoogleGrant = {
   userId: "u1",
@@ -43,6 +44,8 @@ describe("Google OAuth", () => {
   });
 
   it("matches allowed emails exactly and ignores case and surrounding whitespace", () => {
+    expect(emailAllowed("me@example.com")).toBe(false);
+    expect(emailAllowed("me@example.com", " , ")).toBe(false);
     expect(
       emailAllowed("ME@example.com", " me@example.com, other@example.com "),
     ).toBe(true);
