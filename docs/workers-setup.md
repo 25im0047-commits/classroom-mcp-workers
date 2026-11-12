@@ -1,6 +1,6 @@
 # このForkのWorkers運用手順
 
-Google Classroomを学生本人のアカウントで読み取るための個人用構成です。元のリポジトリのMITライセンスと履歴を保持しています。元のコードにある任意のUNIPA連携は、このデプロイでは設定していません。
+Google Classroomを学生本人のアカウントで読み取るための個人用構成です。元のリポジトリのMITライセンスと履歴を保持しています。最新版では旧UNIPA連携は削除されています。
 
 ## 接続先と保存先
 
@@ -19,7 +19,7 @@ Google Classroomを学生本人のアカウントで読み取るための個人�
 2. APIとサービスのライブラリでGoogle Classroom APIを有効化します。
 3. Google Auth Platformのブランド情報を入力します。アプリ名は任意、サポート・連絡先メールは本人が管理できるものにします。
 4. AudienceをExternal / Testingにし、Classroomで使うアカウントをテストユーザーに追加します。学校の組織内プロジェクトを使う場合は、その管理方針に従います。
-5. Data Accessで`openid`、`https://www.googleapis.com/auth/userinfo.email`、`https://www.googleapis.com/auth/classroom.courses.readonly`、`https://www.googleapis.com/auth/classroom.coursework.me.readonly`を追加します。Googleの画面で最後の権限が`classroom.student-submissions.me.readonly`として扱われてもコードは対応しています。
+5. Data Accessで`openid`、`https://www.googleapis.com/auth/userinfo.email`、`https://www.googleapis.com/auth/classroom.courses.readonly`、`https://www.googleapis.com/auth/classroom.coursework.me.readonly`、`https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly`を追加します。Googleの画面で最後の権限が`classroom.student-submissions.me.readonly`として扱われてもコードは対応しています。
 6. Clientsで「ウェブアプリケーション」のOAuthクライアントを作成します。承認済みリダイレクトURIに上記のGoogle callbackを完全一致で登録します。JavaScriptの承認済みオリジンは不要です。
 7. 発行されたIDとSecretを次のCloudflare実行時Secretsへ直接入力します。SecretやGoogleの認証コードをチャットやGitHubへ貼らないでください。
 
@@ -51,8 +51,8 @@ Google資格情報が未設定の間、`/health`と`/authorize`は503です。�
 OAuthとStreamable HTTPに対応するMCPクライアントで、上記MCP URLへ接続します。MCPのクライアント登録・PKCE・トークン発行はWorkerが処理します。GoogleのOAuthクライアントIDはMCPクライアント側には入力しません。
 
 1. クライアントの接続許可画面で、開始したアプリ名と返送先を確認します。
-2. 許可した本人のGoogleアカウントでログインし、Classroomの両方の読み取り権限を許可します。
-3. `tools/list`で5つの読み取りツールが表示されることを確認します。
+2. 許可した本人のGoogleアカウントでログインし、要求したClassroomの読み取り権限を許可します。
+3. `tools/list`で教材権限を含む接続は9ツール、従来の権限だけの接続は7ツールを確認します。うち旧名`get_attachment_content`は参照取得の互換ツールです。
 4. `list_courses`で本人の授業を確認します。実授業一覧をClassroomの画面と照合します。
 5. 授業IDを指定し、`list_assignments`と`list_my_submissions`を確認します。日時はUTCで返されるため、クライアント側で日本時間へ表示変換します。
 6. `list_due_assignments`の`incomplete`と`warnings`を確認します。`UNKNOWN`の提出状態を未提出と断定しないでください。
@@ -73,7 +73,7 @@ node scripts/smoke.mjs https://classroom-mcp-25im0047.shotakobayashi-dev.workers
 
 Googleの設定後は最後のコマンドから`--expect-unconfigured`を外します。smokeは公開のヘルス・OAuth情報・未認証アクセス拒否を確認し、Googleへの認証や授業へのアクセスは行いません。
 
-SDK v2を2.3.1、SDK v1の推移依存を1.31.0へ統一するoverridesを設定しています。Agents 0.24.0のpeer指定が古い固定版のためです。WranglerとMiniflareも修正版へ更新しています。更新時は`npm ci`、型チェック、workerd統合テスト、auditを再確認してください。overridesを削除する前にAgentsのpeer指定が修正版へ更新されたか確認します。
+SDK v2は2.4.0を使用し、Agentsと旧SDKへのoverridesを削除しました。上流の固定バージョンを使います。更新時は`npm ci`、型チェック、workerd統合テスト、auditを確認してください。
 
 ## 更新・停止
 
@@ -82,3 +82,13 @@ SDK v2を2.3.1、SDK v1の推移依存を1.31.0へ統一するoverridesを設定
 接続を取り消す場合はMCPクライアント側で削除し、[Googleの接続管理](https://myaccount.google.com/connections)でもアクセスを取り消します。即時停止が必要な場合は専用Workerを無効化・削除します。KV削除はすべての接続を失わせるため、専用Namespaceであることを確認してください。
 
 観測ログは無効のままです。コードは認証コード、Secret、トークン、上流の詳細エラーをログに出しません。ログ設定を変更する場合は、callbackのクエリ文字列やAuthorizationヘッダーが記録されないことを確認してください。
+
+## 2026-11-12 更新候補の進捗
+
+上流`01ddaa5`を取り込んだ候補は`update/upstream-20261112`に保存します。本番反映は確認待ちです。教材一覧・詳細と添付参照の取得を追加し、本文はGoogle Drive連携へ引き継ぎます。専用URL・KVと空メール許可リストの拒否、暗号化・再起動後のトークン更新の回帰テストを保持します。
+
+教材権限のない既存接続には更新だけで権限を追加しません。新しい教材機能を使う場合だけ、Google CloudのData Accessへ`classroom.courseworkmaterials.readonly`を追加し、MCPクライアントから教材権限を含めて再接続します。明示的に要求されたMCP権限は拡張せず、権限省略時に既定値を使います。Google Driveの権限追加はこのMCPには不要です。
+
+更新前の本番は`/health`が200・ok、このチャットからMCP読み取りが成功。現在の本番Versionは`c3416ac4-1554-4591-98b6-94abcf3b94d6`です。デプロイ後に問題がある場合はこのVersionへロールバックします。SecretsとKVは作り直しません。実Googleでの新しい教材権限の認可・教材取得は未検証です。
+
+候補版の検証結果：Node.js 24で`npm ci`成功、型検査・Workersビルド・10ファイル82テスト・整形確認成功、`npm audit --audit-level=moderate`は0件。独立レビューの指摘（要求権限の維持、ガイド更新、新版を識別するsmokeチェック）は反映済みです。

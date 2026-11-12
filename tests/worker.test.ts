@@ -64,29 +64,8 @@ beforeAll(async () => {
         },
         {
           name: "google-mock",
-          modules: [
-            { type: "ESModule", path: "tests/google-mock.js" },
-            { type: "ESModule", path: "tests/unipa-mock.js" },
-            { type: "ESModule", path: "tests/unipa-fixtures.js" },
-          ],
+          modules: [{ type: "ESModule", path: "tests/google-mock.js" }],
           compatibilityDate: "2026-10-01",
-        },
-        {
-          name: "unipa-enabled",
-          modules: true,
-          scriptPath: "dist/index.js",
-          compatibilityDate: "2026-10-01",
-          compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
-          kvNamespaces: ["OAUTH_KV", "UNIPA_SNAPSHOTS"],
-          bindings: {
-            PUBLIC_URL: origin,
-            GOOGLE_CLIENT_ID: "test-client",
-            GOOGLE_CLIENT_SECRET: "test-secret",
-            ALLOWED_EMAILS: "student@example.com",
-            UNIPA_USER_ID: "synthetic-student-id",
-            UNIPA_PASSWORD: "synthetic-password",
-          },
-          outboundService: "google-mock",
         },
         {
           name: "no-allowlist",
@@ -131,6 +110,10 @@ describe("Worker OAuth and MCP in workerd", () => {
       await send("/.well-known/oauth-authorization-server")
     ).json();
     expect(metadata.scopes_supported).toContain("classroom:read");
+    expect(metadata.scopes_supported).toContain("classroom:materials:read");
+    expect(metadata.scopes_supported).not.toContain(
+      "classroom:attachments:read",
+    );
     expect(metadata.scopes_supported).toContain("offline_access");
     const unauthorized = await send("/mcp", { method: "POST" });
     expect(unauthorized.status).toBe(401);
@@ -166,7 +149,7 @@ describe("Worker OAuth and MCP in workerd", () => {
       code_challenge: await s256(verifier),
       code_challenge_method: "S256",
       resource: `${origin}/mcp`,
-      scope: "classroom:read offline_access",
+      scope: "classroom:read classroom:materials:read offline_access",
       state: "client-state",
     });
     const consent = await send(`/authorize?${params}`);
@@ -219,6 +202,10 @@ describe("Worker OAuth and MCP in workerd", () => {
     remember(approved as unknown as Response);
     const googleUrl = new URL(approved.headers.get("Location")!);
     expect(googleUrl.hostname).toBe("accounts.google.com");
+    expect(googleUrl.searchParams.get("scope")).toContain(
+      "classroom.courseworkmaterials.readonly",
+    );
+    expect(googleUrl.searchParams.get("scope")).not.toContain("/auth/drive");
     const callback = `/callback?state=${googleUrl.searchParams.get("state")}&code=google-code`;
     expect((await send(callback)).status).toBe(400);
     const completed = await send(callback, {
@@ -250,7 +237,7 @@ describe("Worker OAuth and MCP in workerd", () => {
     expect(JSON.stringify(issued)).not.toContain("google-refresh");
   });
 
-  it("lists five read-only tools and reads Classroom through an authenticated MCP call", async () => {
+  it("lists nine read-only tools and returns a Drive plugin handoff without fetching Drive", async () => {
     const headers = {
       Authorization: `Bearer ${mcpToken}`,
       "Content-Type": "application/json",
@@ -290,7 +277,7 @@ describe("Worker OAuth and MCP in workerd", () => {
     });
     expect(listed.status, await listed.clone().text()).toBe(200);
     const list = await rpc(listed as unknown as Response);
-    expect(list.result.tools).toHaveLength(5);
+    expect(list.result.tools).toHaveLength(9);
     expect(
       list.result.tools.every(
         (tool: { annotations: { readOnlyHint: boolean } }) =>
@@ -312,6 +299,56 @@ describe("Worker OAuth and MCP in workerd", () => {
       "Math",
     );
     expect(JSON.stringify(result)).not.toContain("google-access");
+    for (const [name, args, expected] of [
+      ["list_materials", { courseId: "c1" }, "Lecture materials"],
+      [
+        "get_material",
+        { courseId: "c1", materialId: "m1" },
+        "Read the attachment",
+      ],
+      [
+        "get_attachment_reference",
+        {
+          courseId: "c1",
+          sourceType: "material",
+          sourceId: "m1",
+          attachmentIndex: 0,
+        },
+        "google_drive_plugin",
+      ],
+      [
+        "get_attachment_content",
+        {
+          courseId: "c1",
+          sourceType: "material",
+          sourceId: "m1",
+          attachmentIndex: 0,
+        },
+        "google_drive_plugin",
+      ],
+    ] as const) {
+      const response = await send("/mcp", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 10,
+          method: "tools/call",
+          params: { name, arguments: args },
+        }),
+      });
+      const read = (await rpc(response as unknown as Response)).result;
+      expect(read.isError).not.toBe(true);
+      expect(read.content[0].text).toContain(expected);
+      expect(JSON.stringify(read)).not.toContain("google-access");
+      if (name.startsWith("get_attachment_")) {
+        const handoff = JSON.parse(read.content[0].text);
+        expect(handoff.contentFetched).toBe(false);
+        expect(handoff.retrieval.accountEmail).toBe("student@example.com");
+        expect(handoff.retrieval.file.include_base64).toBe(false);
+        expect(handoff).not.toHaveProperty("text");
+      }
+    }
     const invalidInput = await send("/mcp", {
       method: "POST",
       headers,
@@ -366,8 +403,8 @@ describe("Worker OAuth and MCP in workerd", () => {
     const token = await refreshed.json();
     expect(token.access_token).not.toBe(mcpToken);
     expect(token.refresh_token).not.toBe(refreshToken);
-    expect(JSON.stringify(token)).not.toContain("google-refresh");
     refreshToken = token.refresh_token;
+    expect(JSON.stringify(token)).not.toContain("google-refresh");
   });
 
   it("recovers a transient Classroom 503 during an authenticated MCP call", async () => {
@@ -431,155 +468,6 @@ describe("Worker OAuth and MCP in workerd", () => {
     expect(task).not.toHaveProperty("maxPoints");
     expect(task.submission).not.toHaveProperty("submissionHistory");
   });
-  it("adds three optional UNIPA tools and collects notices over HTTP/JSF in workerd", async () => {
-    const worker = await mf.getWorker("unipa-enabled");
-    let unipaToken = mcpToken;
-    const sendUnipa = (path: string, init?: RequestInit) => {
-      const headers = new Headers(init?.headers);
-      headers.set("Host", new URL(origin).host);
-      return worker.fetch(`${origin}${path}`, {
-        ...init,
-        headers,
-        redirect: "manual",
-      });
-    };
-    const call = async (method: string, params: object) => {
-      const response = await worker.fetch(`${origin}/mcp`, {
-        method: "POST",
-        headers: {
-          Host: new URL(origin).host,
-          Authorization: `Bearer ${unipaToken}`,
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          "MCP-Protocol-Version": "2025-06-18",
-        },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 70, method, params }),
-      });
-      expect(response.status).toBe(200);
-      return (await rpc(response as unknown as Response)).result;
-    };
-    // Existing Classroom-only grants do not acquire campus-notice access silently.
-    expect((await call("tools/list", {})).tools).toHaveLength(5);
-    const query = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: "http://localhost:3000/callback",
-      response_type: "code",
-      code_challenge: await s256(verifier),
-      code_challenge_method: "S256",
-      resource: `${origin}/mcp`,
-      scope: "classroom:read offline_access",
-    });
-    const consent = await sendUnipa(`/authorize?${query}`);
-    remember(consent as unknown as Response);
-    const consentBody = await consent.text();
-    expect(consentBody).toContain("unipa:read");
-    expect(consentBody).toContain("最大24時間");
-    const handle = consentBody.match(/name="handle" value="([^"]+)"/)![1]!;
-    const approval = await sendUnipa("/authorize", {
-      method: "POST",
-      headers: {
-        Origin: origin,
-        "Content-Type": "application/x-www-form-urlencoded",
-        Cookie: cookieHeader(),
-      },
-      body: new URLSearchParams({ handle, decision: "approve" }).toString(),
-    });
-    remember(approval as unknown as Response);
-    const google = new URL(approval.headers.get("Location")!);
-    const callback = await sendUnipa(
-      `/callback?state=${google.searchParams.get("state")}&code=google-code`,
-      { headers: { Cookie: cookieHeader() } },
-    );
-    const code = new URL(callback.headers.get("Location")!).searchParams.get(
-      "code",
-    )!;
-    const exchange = await sendUnipa("/oauth/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        client_id: clientId,
-        code,
-        code_verifier: verifier,
-        redirect_uri: "http://localhost:3000/callback",
-        resource: `${origin}/mcp`,
-      }).toString(),
-    });
-    expect(exchange.status).toBe(200);
-    const issued = await exchange.json();
-    expect(issued.scope).toContain("unipa:read");
-    unipaToken = issued.access_token;
-    // Reauthorization replaces the earlier grant for this client and resource.
-    mcpToken = issued.access_token;
-    refreshToken = issued.refresh_token;
-    const tools = await call("tools/list", {});
-    expect(tools.tools).toHaveLength(8);
-    expect(
-      tools.tools.every(
-        (t: { annotations: { readOnlyHint: boolean } }) =>
-          t.annotations.readOnlyHint,
-      ),
-    ).toBe(true);
-    const before = await call("tools/call", {
-      name: "unipa_connection_status",
-      arguments: {},
-    });
-    expect(JSON.parse(before.content[0].text).lastSuccessAt).toBe(null);
-    const result = await call("tools/call", {
-      name: "unipa_list_announcements",
-      arguments: { limit: 20 },
-    });
-    const trace = await (
-      await (
-        await mf.getWorker("google-mock")
-      ).fetch(`${origin}/__unipa_test_trace`)
-    ).json();
-    expect(
-      result.isError,
-      `${result.content[0].text} steps=${JSON.stringify(trace)}`,
-    ).not.toBe(true);
-    const data = JSON.parse(result.content[0].text);
-    expect(data.totalCount).toBe(38);
-    expect(data.notices).toHaveLength(20);
-    expect(data.nextOffset).toBe(20);
-    expect(data.stale).toBe(false);
-    expect(trace).toHaveLength(5);
-    const rest = await call("tools/call", {
-      name: "unipa_list_announcements",
-      arguments: { offset: 20, limit: 20 },
-    });
-    const last = JSON.parse(rest.content[0].text);
-    expect(last.notices).toHaveLength(18);
-    expect(last.nextOffset).toBe(null);
-    expect(
-      new Set([...data.notices, ...last.notices].map((n) => n.id)).size,
-    ).toBe(38);
-    const changes = await call("tools/call", {
-      name: "unipa_list_schedule_changes",
-      arguments: {},
-    });
-    expect(JSON.parse(changes.content[0].text).changes).toHaveLength(2);
-    const ownCache = await mf.getKVNamespace(
-      "UNIPA_SNAPSHOTS",
-      "unipa-enabled",
-    );
-    const keys = await ownCache.list();
-    const stored = JSON.stringify(
-      await Promise.all(keys.keys.map((k) => ownCache.get(k.name))),
-    );
-    for (const secret of [
-      "synthetic-student-id",
-      "synthetic-password",
-      "synthetic-auth",
-      "synthetic-rx",
-      "synthetic-tab-state",
-      "google-access",
-    ]) {
-      expect(JSON.stringify(result)).not.toContain(secret);
-      expect(stored).not.toContain(secret);
-    }
-  });
-
   it("stores encrypted Google grants and keeps OAuth usable after a complete runtime restart", async () => {
     const kv = await mf.getKVNamespace("OAUTH_KV", "classroom");
     const keys = await kv.list();
@@ -628,7 +516,7 @@ describe("Worker OAuth and MCP in workerd", () => {
     expect(listed.status).toBe(200);
     expect(
       (await rpc(listed as unknown as Response)).result.tools,
-    ).toHaveLength(5);
+    ).toHaveLength(9);
   });
 
   it("fails closed for missing allowlist, including already issued access and refresh tokens", async () => {

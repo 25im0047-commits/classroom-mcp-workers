@@ -3,14 +3,13 @@ import OAuthProvider, {
   type OAuthResourceContext,
   type TokenExchangeCallbackOptions,
 } from "@cloudflare/workers-oauth-provider";
-import { createMcpHandler } from "agents/mcp/server";
+import { createMcpHandler } from "./mcp-handler";
 import { authHandler, MCP_SCOPE } from "./auth";
 import { ClassroomClient } from "./classroom";
 import { emailAllowed, refreshGoogleGrant } from "./google";
 import { createClassroomServer } from "./mcp";
-import { UNIPA_SCOPE, unipaEnabled } from "./unipa/config";
-import { UnipaService } from "./unipa/snapshot";
 import type { Env, GoogleAccess, GoogleGrant } from "./types";
+import { MCP_READ_SCOPES, permitsMcpScope } from "./scopes";
 
 export async function exchangeMcpToken(
   options: TokenExchangeCallbackOptions<Env>,
@@ -24,6 +23,10 @@ export async function exchangeMcpToken(
   return {
     newProps: grant,
     accessTokenProps,
+    // Intersect the approved MCP scopes with actual Google permissions.
+    accessTokenScope: options.requestedScope.filter((scope) =>
+      permitsMcpScope(scope, grant.googleScopes),
+    ),
     accessTokenTTL: Math.max(
       1,
       Math.min(3600, Math.floor((grant.expiresAt - Date.now()) / 1000) - 60),
@@ -62,13 +65,10 @@ function createProvider(env: Env) {
             createClassroomServer(
               new ClassroomClient(props.accessToken, request.signal),
               bindings.PUBLIC_URL,
-              unipaEnabled(bindings) && ctx.auth.scope.includes(UNIPA_SCOPE)
-                ? new UnipaService(
-                    bindings,
-                    { userId: props.userId, email: props.email },
-                    request.signal,
-                  )
-                : undefined,
+              ctx.auth.scope.filter((scope) =>
+                permitsMcpScope(scope, props.googleScopes),
+              ),
+              props.email,
             ),
           {
             route: "/mcp",
@@ -86,7 +86,7 @@ function createProvider(env: Env) {
               "127.0.0.1",
             ],
           },
-        )(request, bindings, context);
+        )(request, ctx.auth);
       },
     },
     defaultHandler: authHandler,
@@ -94,11 +94,7 @@ function createProvider(env: Env) {
     tokenEndpoint: "/oauth/token",
     clientRegistrationEndpoint: "/oauth/register",
     clientIdMetadataDocumentEnabled: true,
-    scopesSupported: [
-      MCP_SCOPE,
-      ...(unipaEnabled(env) ? [UNIPA_SCOPE] : []),
-      "offline_access",
-    ],
+    scopesSupported: [...MCP_READ_SCOPES, "offline_access"],
     requiredScopes: [MCP_SCOPE],
     resourceMetadata: {
       resource: `${env.PUBLIC_URL}/mcp`,

@@ -1,4 +1,4 @@
-import type { Assignment, Course, Submission } from "./types";
+import type { Assignment, Course, CourseMaterial, Submission } from "./types";
 
 type Query = Record<string, string | number | undefined>;
 interface Page<T> {
@@ -123,20 +123,23 @@ export class ClassroomClient {
         const timeout = AbortSignal.timeout(Math.min(15_000, remainingTime));
         response = await fetch(url, {
           headers: { Authorization: `Bearer ${this.accessToken}` },
+          // Workers supports manual/follow. Reject 3xx below without forwarding credentials.
+          redirect: "manual",
           signal: this.signal
             ? AbortSignal.any([timeout, this.signal])
             : timeout,
         });
         // Await body consumption inside the retry boundary: it can time out too.
         if (response.ok) return (await response.json()) as T;
-      } catch {
+      } catch (error) {
+        if (error instanceof ClassroomError) throw error;
         this.checkCancelled();
         response = undefined;
       }
       const messages: Record<number, string> = {
         401: "Google access expired or was revoked. Reconnect this MCP.",
         403: "Access denied. Check enrollment, Classroom API enablement, OAuth scopes, and your school's administrator policy.",
-        404: "Course or assignment not found, or it is inaccessible.",
+        404: "Course, assignment or material not found, or it is inaccessible.",
         429: "Classroom rate limit exceeded. Retry later.",
       };
       const message = response
@@ -218,6 +221,134 @@ export class ClassroomClient {
       `courses/${encodeURIComponent(courseId)}/courseWork/${encodeURIComponent(assignmentId)}`,
     );
     return { ...work, dueAt: dueAt(work) };
+  }
+
+  async listMaterials(input: {
+    courseId: string;
+    pageSize?: number;
+    pageToken?: string;
+  }) {
+    const result = await this.page<CourseMaterial>(
+      `courses/${encodeURIComponent(input.courseId)}/courseWorkMaterials`,
+      "courseWorkMaterial",
+      {
+        courseWorkMaterialStates: "PUBLISHED",
+        orderBy: "updateTime desc",
+        pageSize: input.pageSize ?? 100,
+        pageToken: input.pageToken,
+      },
+    );
+    return { materials: result.items, nextPageToken: result.nextPageToken };
+  }
+
+  async getMaterial(courseId: string, materialId: string) {
+    const material = await this.get<CourseMaterial>(
+      `courses/${encodeURIComponent(courseId)}/courseWorkMaterials/${encodeURIComponent(materialId)}`,
+    );
+    if (material.state !== "PUBLISHED")
+      throw new ClassroomError(
+        "Only published Classroom materials can be read.",
+      );
+    return material;
+  }
+
+  async getAttachmentReference(
+    input: {
+      courseId: string;
+      sourceType: "material" | "assignment";
+      sourceId: string;
+      attachmentIndex: number;
+    },
+    accountEmail?: string,
+  ) {
+    this.checkCancelled();
+    // Re-read the parent; the client cannot select an arbitrary Drive file.
+    const parent =
+      input.sourceType === "material"
+        ? await this.getMaterial(input.courseId, input.sourceId)
+        : await this.getAssignment(input.courseId, input.sourceId);
+    if (parent.state !== "PUBLISHED")
+      throw new ClassroomError(
+        "Only attachments of published Classroom items can be referenced.",
+      );
+    const attachment = parent.materials?.[input.attachmentIndex];
+    if (!attachment)
+      throw new ClassroomError(
+        "Attachment index not found. Read the source item again.",
+      );
+    const provenance = {
+      courseId: input.courseId,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      sourceTitle: parent.title,
+      attachmentIndex: input.attachmentIndex,
+      attachment,
+      contentFetched: false,
+    };
+    const file = attachment.driveFile?.driveFile;
+    if (!file)
+      return {
+        ...provenance,
+        retrieval: {
+          provider: "external_reference",
+          status: "reference_only",
+          performed: false,
+        },
+        nextStep:
+          "This is not a Drive file attachment. Use the original link, video or Form reference; do not send it to the Google Drive plugin.",
+      };
+    if (typeof file.id !== "string" || !/^[a-zA-Z0-9_-]{1,256}$/.test(file.id))
+      throw new ClassroomError("The attachment has an invalid Drive file ID.");
+    const driveUrl = new URL(`https://drive.google.com/file/d/${file.id}/view`);
+    // Retain a resource key only when the source URL refers to this exact file.
+    // Never forward arbitrary URL parameters or follow a source-provided host.
+    if (file.alternateLink) {
+      try {
+        const original = new URL(file.alternateLink);
+        const originalId =
+          original.pathname.match(/\/d\/([a-zA-Z0-9_-]+)(?:\/|$)/)?.[1] ??
+          (original.pathname === "/open"
+            ? original.searchParams.get("id")
+            : null);
+        const resourceKey = original.searchParams.get("resourcekey");
+        if (
+          original.protocol === "https:" &&
+          ["drive.google.com", "docs.google.com"].includes(original.hostname) &&
+          !original.username &&
+          !original.password &&
+          !original.port &&
+          originalId === file.id &&
+          resourceKey &&
+          /^[a-zA-Z0-9_-]{1,256}$/.test(resourceKey)
+        )
+          driveUrl.searchParams.set("resourcekey", resourceKey);
+      } catch {
+        /* The validated file ID remains sufficient for the reference. */
+      }
+    }
+    const url = driveUrl.toString();
+    return {
+      ...provenance,
+      fileId: file.id,
+      title: file.title,
+      url,
+      retrieval: {
+        provider: "google_drive_plugin",
+        status: "requires_client_action",
+        performed: false,
+        accountEmail,
+        metadata: { action: "get_file_metadata", fileId: file.id },
+        text: { action: "fetch", url },
+        file: {
+          action: "fetch",
+          url,
+          download_raw_file: true,
+          include_base64: false,
+        },
+      },
+      nextStep:
+        "The MCP has not read or downloaded this file. Select the connected Google Drive account matching accountEmail, read metadata, then use its fetch action for text or a raw file reference. The client must call the plugin; this Worker cannot invoke it. If the plugin is unavailable or denied, report that limitation without retrying this MCP for file contents or switching accounts.",
+    };
   }
 
   async listMySubmissions(input: {

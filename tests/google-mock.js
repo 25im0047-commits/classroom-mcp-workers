@@ -1,6 +1,15 @@
 // Integration fixture: no real Google credentials or network requests.
-import { mockUnipa, unipaRequestTrace } from "./unipa-mock.js";
 let transientFailures = 0;
+const material = {
+  id: "m1",
+  courseId: "c1",
+  title: "Lecture materials",
+  description: "Read the attachment",
+  state: "PUBLISHED",
+  materials: [
+    { driveFile: { driveFile: { id: "lecture", title: "Lecture document" } } },
+  ],
+};
 function project(data, fields) {
   if (!fields) return data;
   const match = fields.match(/^nextPageToken,(\w+)\(([^)]+)\)$/);
@@ -21,9 +30,6 @@ function project(data, fields) {
 export default {
   async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === "/__unipa_test_trace")
-      return Response.json(unipaRequestTrace);
-    if (url.hostname === "unipa.i-u.ac.jp") return mockUnipa(request);
     if (url.hostname === "oauth2.googleapis.com") {
       const form = new URLSearchParams(await request.text());
       return Response.json({
@@ -34,7 +40,7 @@ export default {
         expires_in: 3600,
         refresh_token: "google-refresh",
         scope:
-          "https://www.googleapis.com/auth/classroom.courses.readonly https://www.googleapis.com/auth/classroom.coursework.me.readonly",
+          "https://www.googleapis.com/auth/classroom.courses.readonly https://www.googleapis.com/auth/classroom.coursework.me.readonly https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly",
       });
     }
     if (url.hostname === "openidconnect.googleapis.com")
@@ -43,6 +49,17 @@ export default {
         email: "student@example.com",
         email_verified: true,
       });
+    if (
+      url.hostname === "classroom.googleapis.com" &&
+      url.pathname === "/v1/courses/c1/courseWorkMaterials"
+    )
+      return Response.json({ courseWorkMaterial: [material] });
+    if (
+      url.hostname === "classroom.googleapis.com" &&
+      url.pathname === "/v1/courses/c1/courseWorkMaterials/m1"
+    )
+      return Response.json(material);
+    // Any Drive request is an integration regression: the Worker must only hand off references.
     if (
       url.hostname === "classroom.googleapis.com" &&
       url.pathname === "/v1/courses" &&

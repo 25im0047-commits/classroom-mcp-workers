@@ -38,6 +38,10 @@ verify(auth.token_endpoint === `${base}/oauth/token`, "token endpoint");
 verify(auth.code_challenge_methods_supported.includes("S256"), "S256 PKCE");
 verify(auth.scopes_supported.includes("classroom:read"), "read scope");
 verify(
+  auth.scopes_supported.includes("classroom:materials:read"),
+  "material read scope (updated server)",
+);
+verify(
   !auth.scopes_supported.includes("unipa:read"),
   "optional UNIPA disabled",
 );

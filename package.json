@@ -31,25 +31,15 @@
   "homepage": "https://github.com/25im0047-commits/classroom-mcp-workers#readme",
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.1",
-    "@modelcontextprotocol/server": "2.3.1",
-    "agents": "0.24.0",
-    "fast-xml-parser": "5.11.2",
-    "linkedom": "0.18.13",
-    "tough-cookie": "6.0.2",
-    "zod": "4.6.5"
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20261006.1",
-    "@modelcontextprotocol/client": "2.3.1",
-    "miniflare": "5.20261006.1-alpha",
+    "@cloudflare/workers-types": "5.20261023.1",
+    "miniflare": "5.20261023.1-beta",
     "prettier": "3.9.9",
     "typescript": "7.0.2",
     "vitest": "5.0.3",
-    "wrangler": "4.149.0"
-  },
-  "overrides": {
-    "@modelcontextprotocol/client": "$@modelcontextprotocol/client",
-    "@modelcontextprotocol/server": "$@modelcontextprotocol/server",
-    "@modelcontextprotocol/sdk": "1.31.0"
+    "wrangler": "4.154.0"
   }
 }

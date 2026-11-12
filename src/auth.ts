@@ -7,9 +7,9 @@ import {
 } from "@cloudflare/workers-oauth-provider";
 import { exchangeGoogleCode, googleAuthorizeUrl, s256 } from "./google";
 import type { Env } from "./types";
-import { UNIPA_SCOPE, unipaEnabled } from "./unipa/config";
+import { MATERIALS_SCOPE, MCP_READ_SCOPES, MCP_SCOPE } from "./scopes";
 
-export const MCP_SCOPE = "classroom:read";
+export { MCP_SCOPE } from "./scopes";
 
 async function readConsentForm(request: Request): Promise<string | null> {
   const limit = 8192;
@@ -50,7 +50,6 @@ export function escapeHtml(value: string): string {
 export function consentPage(
   details: ConsentDescription,
   handle: string,
-  unipa = false,
 ): string {
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="icon" type="image/png" href="/favicon.png"><title>Classroom MCP 接続の許可</title></head><body>
 <img src="/icon-128.png" width="64" height="64" alt="Classroom MCP">
@@ -60,7 +59,8 @@ export function consentPage(
 <p>認証情報の返送先: <strong>${escapeHtml(details.redirectHost)}</strong></p>
 ${details.redirectIsLoopback ? "<p>コンピューター内のアプリに接続権限を渡します。自分で開始した接続であることを確認してください。</p>" : ""}
 <p>許可する権限: ${MCP_SCOPE}（授業、公開済み課題、添付資料へのリンク、自分の提出状況の読み取り）</p>
-${unipa ? `<p>追加で許可する権限: ${UNIPA_SCOPE}（本人用UNIPA通知の読み取り）。接続先アプリはUNIPAの掲示一覧（件名・カテゴリ・差出人・掲示日・未読状態）と、件名由来の休講・教室変更候補を読み取れます。本文と出席情報は取得しません。通知一覧は本人のWorkerに最大24時間保存します。</p>` : ""}
+${details.scope.includes(MATERIALS_SCOPE) ? `<p>${MATERIALS_SCOPE}（公開済みの一般配布資料の一覧・説明の読み取り）</p>` : ""}
+<p>添付ファイルの本文・ダウンロードは、接続先クライアントのGoogle Driveプラグインで取得します。このMCPは添付参照だけを返し、Drive権限を要求しません。Google Driveプラグインへの接続・認可は別途必要です。</p>
 <p>次の画面でGoogleアカウントを選択し、読み取り権限を許可します。接続の継続にはGoogleのオフラインアクセスを使用します。</p>
 <form method="post" action="/authorize"><input type="hidden" name="handle" value="${escapeHtml(handle)}">
 <button name="decision" value="approve">許可してGoogleへ</button> <button name="decision" value="deny">拒否</button></form>
@@ -126,11 +126,11 @@ export const authHandler = {
           const authRequest = await oauth.parseAuthRequest(request);
           // Freeze the permissions shown on this page into the encrypted transaction.
           // Deployments/Secrets can change between GET and POST; POST must not add scopes.
-          authRequest.scope = [
-            MCP_SCOPE,
-            ...(unipaEnabled(env) ? [UNIPA_SCOPE] : []),
-            "offline_access",
-          ];
+          authRequest.scope = authRequest.scope.length
+            ? authRequest.scope.filter((scope) =>
+                [...MCP_READ_SCOPES, "offline_access"].includes(scope),
+              )
+            : [...MCP_READ_SCOPES, "offline_access"];
           const details = await oauth.describeConsent(authRequest);
           const consent = await oauth.beginConsent(authRequest);
           consent.headers.set("Content-Type", "text/html; charset=utf-8");
@@ -138,16 +138,9 @@ export const authHandler = {
           // Send only the origin, keeping OAuth query parameters out of Referer.
           consent.headers.set("Referrer-Policy", "origin");
           consent.headers.set("X-Content-Type-Options", "nosniff");
-          return new Response(
-            consentPage(
-              details,
-              consent.handle,
-              authRequest.scope.includes(UNIPA_SCOPE),
-            ),
-            {
-              headers: consent.headers,
-            },
-          );
+          return new Response(consentPage(details, consent.handle), {
+            headers: consent.headers,
+          });
         }
         if (request.method === "POST") {
           // Bound form parsing before the browser-bound consent validation.
@@ -176,7 +169,12 @@ export const authHandler = {
           });
           upstream.headers.set(
             "Location",
-            googleAuthorizeUrl(env, upstream.state, await s256(verifier)),
+            googleAuthorizeUrl(
+              env,
+              upstream.state,
+              await s256(verifier),
+              approved.request.scope,
+            ),
           );
           upstream.headers.set("Referrer-Policy", "no-referrer");
           return new Response(null, { status: 302, headers: upstream.headers });
@@ -199,6 +197,7 @@ export const authHandler = {
           env,
           code,
           resumed.data.verifier,
+          resumed.request.scope,
         );
         const completed = await oauth.completeAuthorization({
           request: resumed.request,
